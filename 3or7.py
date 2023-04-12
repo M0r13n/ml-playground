@@ -57,6 +57,9 @@ class Image:
         print('==>', self.label)
 
 
+    def rotate(self):
+        self.rows = list(zip(*self.rows))
+
 class MNISTReader:
     IDX1_MAGIC_NUMBER = 2049
     IDX3_MAGIC_NUMBER = 2051
@@ -82,7 +85,6 @@ class MNISTReader:
         # make sure that the files actually exist
         assert self.label_file.exists() and self.label_file.is_file()
         assert self.image_file.exists() and self.label_file.is_file()
-
 
     def read(self):
         with gzip.open(self.label_file, 'r') as lfd:
@@ -124,12 +126,13 @@ def main():
         if img.label == 3:
             threes = mat_add(threes, img.rows)
             three_cnt += 1
-
         if img.label == 7:
             sevens = mat_add(sevens, img.rows)
 
     scalar_mult(threes,  lambda x: x//three_cnt)
-    Image(3, threes).pretty_print()
+    threes = Image(3, threes)
+    threes.rotate()
+    threes.pretty_print()
 
 if __name__ == '__main__':
     main()
