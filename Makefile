@@ -1,9 +1,9 @@
 test:
 	flake8
-	mypy ./*.py
+	mypy --ignore-missing-imports ./*.py
 
 install: download
-	pip install flake8 autopep8 mypy
+	pip install flake8 autopep8 mypy colorama
 
 download:
 	mkdir res || true
