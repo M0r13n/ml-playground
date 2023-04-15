@@ -3,6 +3,7 @@ import time
 import colorama
 import colorama.initialise
 
+import pretty
 import mnist
 import mathutil
 
@@ -13,22 +14,6 @@ P_TRAINING_IMG_FILE = 'res/gzip/emnist-digits-train-images-idx3-ubyte.gz'
 
 P_VALIDATION_LABEL_FILE = 'res/gzip/emnist-digits-test-labels-idx1-ubyte.gz'
 P_VALIDATION_IMG_FILE = 'res/gzip/emnist-digits-test-images-idx3-ubyte.gz'
-
-PIXEL_ASCII_MAP = " `^\",:;Il!i~+_-?][}{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@ "
-
-
-def pretty_print(tensor: mathutil.Tensor) -> None:
-    # print the image as ASCII grey scale
-    for row in tensor.matrix:
-        line = ''
-        for pixel in row:
-            char = PIXEL_ASCII_MAP[int((pixel * len(PIXEL_ASCII_MAP) - 1) // 255)]
-            if pixel < 0:
-                line += f'{colorama.Fore.RED}{char}{colorama.Style.RESET_ALL}'
-            else:
-                line += char
-
-        print(line)
 
 
 def main():
@@ -70,6 +55,7 @@ def main():
     # compute bias: the middle of the means
     bias = -(mean7 / seven_cnt + mean3 / three_cnt) / 2
     print("Bias computation took:", time.time() - start)
+    print('Bias:', bias)
 
     # create a new reader
     reader = mnist.MNISTReader(P_VALIDATION_LABEL_FILE, P_VALIDATION_IMG_FILE)
@@ -94,6 +80,9 @@ def main():
     print("Validation took:", time.time() - start)
     print(f'Looked at 240.000 training images and {i} validation images.')
     print(f'Accuracy: {correct / total :.0%}')
+
+    delta.rotate()
+    pretty.pretty_print(delta)
 
 
 if __name__ == '__main__':
