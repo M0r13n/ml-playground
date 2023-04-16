@@ -116,7 +116,7 @@ class Tensor:
         return res
 
     def rotate(self) -> None:
-        self.matrix = list(zip(*self.matrix))  # type: ignore
+        self.matrix = list(map(list, zip(*self.matrix)))
 
     def randomize(self, lb: Number, ub: Number) -> None:
         """Randomly choose values for every element of the matrix in the interval [lb:ub]
@@ -124,3 +124,15 @@ class Tensor:
         for i in range(self.m):
             for j in range(self.n):
                 self[i][j] = random.randint(int(lb), int(ub))
+
+    def normalize(self) -> None:
+        # normalize values to [-255,255]
+        lmin, lmax = 0.0, 0.0
+        for row in self.matrix:
+            for val in row:
+                lmin = min(lmin, val)
+                lmax = max(lmax, val)
+
+        for i in range(self.m):
+            for j in range(self.n):
+                self[i][j] = round(255 * (self[i][j] - lmin) / (lmax - lmin))

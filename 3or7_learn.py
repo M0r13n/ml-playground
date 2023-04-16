@@ -74,7 +74,8 @@ def main():
 
     test(bias, weights)
     weights.rotate()
-    pretty.pretty_print(weights)
+    # pretty.pretty_print(weights)
+    pretty.write_img(weights, 'final.png')
 
 
 if __name__ == '__main__':

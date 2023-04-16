@@ -1,4 +1,5 @@
 import colorama
+import png
 import mathutil
 
 
@@ -32,3 +33,10 @@ def pretty_print(tensor: mathutil.Tensor) -> None:
                 line += char
 
         print(line)
+
+
+def write_img(tensor: mathutil.Tensor, path: str) -> None:
+    tensor.normalize()
+    with open(path, 'wb') as f:
+        w = png.Writer(28, 28, greyscale=True)
+        w.write(f, tensor.matrix)

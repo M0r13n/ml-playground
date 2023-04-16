@@ -3,7 +3,7 @@ test:
 	mypy --ignore-missing-imports ./*.py
 
 install: download
-	pip install flake8 autopep8 mypy colorama
+	pip install flake8 autopep8 mypy colorama pypng
 
 download:
 	mkdir res || true
