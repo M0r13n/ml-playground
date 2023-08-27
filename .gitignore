@@ -1,3 +1,5 @@
 res/
 venv/
 *.png
+.ipynb_checkpoints/
+data/
