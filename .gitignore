@@ -3,5 +3,5 @@ venv/
 *.png
 .ipynb_checkpoints/
 data/
-gpt/attention/the-verdict.txt
+**/the-verdict.txt
 gpt/tinygrad/
