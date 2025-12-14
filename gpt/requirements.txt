@@ -3,3 +3,5 @@ tiktoken
 torch
 requests
 numpy
+tensorflow
+
