@@ -460,7 +460,7 @@ if __name__ == "__main__":
 
     tiny_model.reset_cache()
 
-    input_batch = encoder("Is Django a good framework?").unsqueeze(0)
+    input_batch = encoder("What is the purpose of life?").unsqueeze(0)
     logits = tiny_model(input_batch, use_cache=True)
 
     max_new_tokens = 100
