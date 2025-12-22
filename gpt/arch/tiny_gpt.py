@@ -432,6 +432,35 @@ def load_model(params) -> TinyGPTModel:
     return tiny_model
 
 
+def sample_top_p(logits: Tensor, top_p: float = 0.9) -> Tensor:
+    # logits: (B, V) -> (1, 50257)
+    # Convert logits to probabilities
+    probs = logits.softmax(axis=-1)
+
+    # Limit to top 100 tokens
+    sorted_probs, topk_ids = probs.topk(50, dim=-1)
+
+    # Compute the cumulative sum
+    cum = sorted_probs.cumsum(axis=-1)
+
+    # Mask for elements whose cum sum is less or equal to p
+    keep = ((cum - sorted_probs) < top_p).float()
+
+    # Ensure at least 1 token kept
+    keep = Tensor.ones((logits.shape[0], 1), dtype=sorted_probs.dtype, device=sorted_probs.device).cat(keep[:, 1:], dim=-1)
+
+    # Mask + renormalize
+    filtered = sorted_probs * keep
+    filtered = filtered / filtered.sum(axis=-1, keepdim=True)
+
+    # Sample in sorted space, then map back to vocab ids
+    sampled_pos = filtered.multinomial()
+    sampled_pos.realize()
+
+    token = topk_ids.gather(-1, sampled_pos)
+    return token.realize()
+
+
 if __name__ == "__main__":
     print('Downloading model...')
     download_gpt_model(
@@ -447,30 +476,23 @@ if __name__ == "__main__":
 
     print("Loading model...")
     tiny_model = load_model(params)
+    tiny_model.reset_cache()
     print('Model loaded.')
 
     encoder = TinyEncoder()
-
-    input_batch = encoder("Hello world in Python").unsqueeze(0)
-    logits = tiny_model(input_batch, use_cache=True)
-
-    max_new_tokens = 100
-    idx = input_batch
-    context_size = 1024
-
-    tiny_model.reset_cache()
-
     input_batch = encoder("What is the purpose of life?").unsqueeze(0)
     logits = tiny_model(input_batch, use_cache=True)
-
-    max_new_tokens = 100
+    max_new_tokens = 30
     idx = input_batch
     last_line_count = 0
 
     for _ in range(max_new_tokens):
         logits = logits[:, -1, :]
+
         probas = logits.softmax(axis=-1)
         nxt = probas.argmax(axis=-1, keepdim=True).realize()
+
+        nxt = sample_top_p(logits)
 
         idx = idx.cat(nxt, dim=1)
         logits = tiny_model(nxt, use_cache=True).realize()
