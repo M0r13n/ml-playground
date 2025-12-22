@@ -438,12 +438,13 @@ def sample_top_p(logits: Tensor, top_p: float = 0.9) -> Tensor:
     probs = logits.softmax(axis=-1)
 
     # Limit to top 100 tokens
-    sorted_probs, topk_ids = probs.topk(50, dim=-1)
+    sorted_probs, topk_ids = probs.topk(100, dim=-1)
 
     # Compute the cumulative sum
     cum = sorted_probs.cumsum(axis=-1)
 
     # Mask for elements whose cum sum is less or equal to p
+    # cum - sorted_probs shifts everything to the right: cumulative sum excluding the current element
     keep = ((cum - sorted_probs) < top_p).float()
 
     # Ensure at least 1 token kept
@@ -492,7 +493,7 @@ if __name__ == "__main__":
         probas = logits.softmax(axis=-1)
         nxt = probas.argmax(axis=-1, keepdim=True).realize()
 
-        nxt = sample_top_p(logits)
+        nxt = sample_top_p(logits, top_p=0.7)
 
         idx = idx.cat(nxt, dim=1)
         logits = tiny_model(nxt, use_cache=True).realize()
