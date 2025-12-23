@@ -6,3 +6,4 @@ data/
 **/the-verdict.txt
 gpt/tinygrad/
 **/gpt2_weights/
+**/*.bin

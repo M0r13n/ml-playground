@@ -465,7 +465,7 @@ if __name__ == "__main__":
     max_new_tokens = 60
     idx = input_batch
     last_line_count = 0
-    temperature = 1.0
+    temperature = 0.0
 
     for _ in range(max_new_tokens):
         logits = logits[:, -1, :]
