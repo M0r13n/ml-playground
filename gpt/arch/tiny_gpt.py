@@ -115,12 +115,13 @@
 """
 import math
 import pathlib
+import random
 import sys
 import tiktoken
 
-import numpy as np
 import requests as r
-from tinygrad import Tensor, nn
+from tinygrad import Tensor, Device, nn
+from tinygrad.nn.state import torch_load
 
 
 GPT_CONFIG_124M = {
@@ -316,7 +317,7 @@ class TinyGPTModel:
 
     def __call__(self, in_idx: Tensor, use_cache: bool = False) -> Tensor:
         num_batches, seq_len = in_idx.shape
-        embedding = self.emb_layer(in_idx)
+        embedding = self.emb_layer(in_idx).realize()
 
         if use_cache:
             positions = Tensor.arange(self.current_pos, self.current_pos + seq_len)
@@ -341,161 +342,143 @@ class TinyGPTModel:
             blk.attention.reset_cache()
 
 
-def download_gpt_model(base_url, model_size, download_dir):
-    models_dir = pathlib.Path(download_dir)
-    models_dir.mkdir(exist_ok=True)
+def download_gpt_model(model_size: str) -> pathlib.Path:
+    url = f"https://huggingface.co/{model_size}/resolve/main/pytorch_model.bin"
+    out_file = pathlib.Path(url.split('/')[-1])
 
-    files = [
-        "checkpoint", "encoder.json", "hparams.json",
-        "model.ckpt.data-00000-of-00001", "model.ckpt.index",
-        "model.ckpt.meta", "vocab.bpe"
-    ]
+    if out_file.exists():
+        return out_file
 
-    for filename in files:
-        url = f"{base_url}/{model_size}/{filename}"
-        filepath = models_dir.joinpath(filename)
-        if not filepath.exists():
-            print(f"Downloading {filename}...")
-            response = r.get(url)
-            with open(filepath, "wb") as f:
-                f.write(response.content)
-
-
-def load_tf_checkpoint(models_dir):
-    import tensorflow as tf
-
-    models_dir = pathlib.Path(models_dir)
-    tf_ckpt_path = models_dir.joinpath("model.ckpt")
-    params = {}
-
-    for name, _ in tf.train.list_variables(tf_ckpt_path):
-        arr = tf.train.load_variable(tf_ckpt_path, name)
-        params[name] = arr
-    return params
-
-
-def to_tensor(arr: np.array) -> Tensor:
-    return Tensor(arr.astype(np.float32))
+    print(f"Downloading {out_file.name}...")
+    response = r.get(url)
+    with open(out_file, "wb") as f:
+        f.write(response.content)
+    return out_file
 
 
 def assign(left: Tensor, right: Tensor):
     if left.shape != right.shape:
         raise ValueError(f'Dimensions mismatch: {left.shape} != {right.shape}')
-    return right
+    return right.contiguous().realize()
 
 
-def load_model(params) -> TinyGPTModel:
+def load_model(weights) -> TinyGPTModel:
     tiny_model = TinyGPTModel(GPT_CONFIG_124M)
 
-    tiny_model.emb_layer.weight = assign(tiny_model.emb_layer.weight, to_tensor(params["model/wte"]))
-    tiny_model.pos_layer.weight = assign(tiny_model.pos_layer.weight, to_tensor(params["model/wpe"]))
+    tiny_model.emb_layer.weight = assign(tiny_model.emb_layer.weight, weights["wte.weight"])
+    tiny_model.pos_layer.weight = assign(tiny_model.pos_layer.weight, weights["wpe.weight"])
 
     for i, block in enumerate(tiny_model.trf_blocks):
         # Layer norms
-        block.norm1.scale = assign(block.norm1.scale, to_tensor(params[f"model/h{i}/ln_1/g"]))
-        block.norm1.shift = assign(block.norm1.shift, to_tensor(params[f"model/h{i}/ln_1/b"]))
-        block.norm2.scale = assign(block.norm2.scale, to_tensor(params[f"model/h{i}/ln_2/g"]))
-        block.norm2.shift = assign(block.norm2.shift, to_tensor(params[f"model/h{i}/ln_2/b"]))
+        block.norm1.scale = assign(block.norm1.scale, weights[f"h.{i}.ln_1.weight"])
+        block.norm1.shift = assign(block.norm1.shift, weights[f"h.{i}.ln_1.bias"])
+        block.norm2.scale = assign(block.norm2.scale, weights[f"h.{i}.ln_2.weight"])
+        block.norm2.shift = assign(block.norm2.shift, weights[f"h.{i}.ln_2.bias"])
 
         # Attention - weights
-        qkv_w = params[f"model/h{i}/attn/c_attn/w"][0]  # Shape: (768, 2304)
-        q_w, k_w, v_w = np.split(qkv_w, 3, axis=-1)
+        qkv_w = weights[f"h.{i}.attn.c_attn.weight"]  # Shape: (768, 2304)
+        q_w, k_w, v_w = qkv_w.chunk(3, dim=-1)
 
-        block.attention.W_q.weight = assign(block.attention.W_q.weight, to_tensor(q_w.T))
-        block.attention.W_k.weight = assign(block.attention.W_k.weight, to_tensor(k_w.T))
-        block.attention.W_v.weight = assign(block.attention.W_v.weight, to_tensor(v_w.T))
+        block.attention.W_q.weight = assign(block.attention.W_q.weight, q_w.T)
+        block.attention.W_k.weight = assign(block.attention.W_k.weight, k_w.T)
+        block.attention.W_v.weight = assign(block.attention.W_v.weight, v_w.T)
 
         # Attention - bias
-        qkv_b = params[f"model/h{i}/attn/c_attn/b"]
-        q_b, k_b, v_b = np.split(qkv_b, 3, axis=-1)
+        qkv_b = weights[f"h.{i}.attn.c_attn.bias"]
+        q_b, k_b, v_b = qkv_b.chunk(3, dim=-1)
 
-        block.attention.W_q.bias = assign(block.attention.W_q.bias, to_tensor(q_b))
-        block.attention.W_k.bias = assign(block.attention.W_k.bias, to_tensor(k_b))
-        block.attention.W_v.bias = assign(block.attention.W_v.bias, to_tensor(v_b))
+        block.attention.W_q.bias = assign(block.attention.W_q.bias, q_b)
+        block.attention.W_k.bias = assign(block.attention.W_k.bias, k_b)
+        block.attention.W_v.bias = assign(block.attention.W_v.bias, v_b)
 
         # Attention = Output projection
-        block.attention.out_proj.weight = assign(block.attention.out_proj.weight, to_tensor(params[f"model/h{i}/attn/c_proj/w"][0].T))
-        block.attention.out_proj.bias = assign(block.attention.out_proj.bias, to_tensor(params[f"model/h{i}/attn/c_proj/b"]))
+        block.attention.out_proj.weight = assign(block.attention.out_proj.weight, weights[f"h.{i}.attn.c_proj.weight"].T)
+        block.attention.out_proj.bias = assign(block.attention.out_proj.bias, weights[f"h.{i}.attn.c_proj.bias"])
 
         # FFN
-        block.ff.expansion.weight = assign(block.ff.expansion.weight, to_tensor(params[f"model/h{i}/mlp/c_fc/w"][0].T))
-        block.ff.expansion.bias = assign(block.ff.expansion.bias, to_tensor(params[f"model/h{i}/mlp/c_fc/b"]))
-        block.ff.projection.weight = assign(block.ff.projection.weight, to_tensor(params[f"model/h{i}/mlp/c_proj/w"][0].T))
-        block.ff.projection.bias = assign(block.ff.projection.bias, to_tensor(params[f"model/h{i}/mlp/c_proj/b"]))
+        block.ff.expansion.weight = assign(block.ff.expansion.weight, weights[f"h.{i}.mlp.c_fc.weight"].T)
+        block.ff.expansion.bias = assign(block.ff.expansion.bias, weights[f"h.{i}.mlp.c_fc.bias"])
+        block.ff.projection.weight = assign(block.ff.projection.weight, weights[f"h.{i}.mlp.c_proj.weight"].T)
+        block.ff.projection.bias = assign(block.ff.projection.bias, weights[f"h.{i}.mlp.c_proj.bias"])
 
     # Final norm
-    tiny_model.final_norm.scale = to_tensor(params["model/ln_f/g"])
-    tiny_model.final_norm.shift = to_tensor(params["model/ln_f/b"])
+    tiny_model.final_norm.scale = assign(tiny_model.final_norm.scale, weights["ln_f.weight"])
+    tiny_model.final_norm.shift = assign(tiny_model.final_norm.shift, weights["ln_f.bias"])
 
     # Output head
-    tiny_model.out_head.weight = to_tensor(params["model/wte"])
+    tiny_model.out_head.weight = assign(tiny_model.out_head.weight, weights["wte.weight"])
     return tiny_model
 
 
-def sample_top_p(logits: Tensor, top_p: float = 0.9) -> Tensor:
-    # logits: (B, V) -> (1, 50257)
-    # Convert logits to probabilities
-    probs = logits.softmax(axis=-1)
+def sample_top_p(logits_batch: Tensor, top_p: float = 0.9) -> Tensor:
+    """Nucleus sampling
+    Done in Python, because I do not know how to do this in tinygrad."""
+    logits_list = logits_batch.realize().tolist()
+    out = []
 
-    # Limit to top 100 tokens
-    sorted_probs, topk_ids = probs.topk(100, dim=-1)
+    for logits in logits_list:
+        max_logit = max(logits)
 
-    # Compute the cumulative sum
-    cum = sorted_probs.cumsum(axis=-1)
+        # softmax (stable)
+        probs = [math.exp(l - max_logit) for l in logits]
+        s = sum(probs)
+        probs = [p / s for p in probs]
 
-    # Mask for elements whose cum sum is less or equal to p
-    # cum - sorted_probs shifts everything to the right: cumulative sum excluding the current element
-    keep = ((cum - sorted_probs) < top_p).float()
+        # sort by probability
+        pairs = sorted(enumerate(probs), key=lambda x: x[1], reverse=True)
 
-    # Ensure at least 1 token kept
-    keep = Tensor.ones((logits.shape[0], 1), dtype=sorted_probs.dtype, device=sorted_probs.device).cat(keep[:, 1:], dim=-1)
+        # top-p truncation (only include values with cumsum up to p)
+        cum = 0.0
+        filtered = []
+        for idx, p in pairs:
+            cum += p
+            filtered.append((idx, p))
+            if cum >= top_p:
+                break
 
-    # Mask + renormalize
-    filtered = sorted_probs * keep
-    filtered = filtered / filtered.sum(axis=-1, keepdim=True)
+        indices, weights = zip(*filtered)
+        token = random.choices(indices, weights=weights, k=1)[0]
+        out.append(token)
 
-    # Sample in sorted space, then map back to vocab ids
-    sampled_pos = filtered.multinomial()
-    sampled_pos.realize()
-
-    token = topk_ids.gather(-1, sampled_pos)
-    return token.realize()
+    return Tensor(out, device=logits_batch.device).reshape(logits_batch.shape[0], 1)
 
 
 if __name__ == "__main__":
+    Tensor.training = False
+    print(f'Default Device: {Device.DEFAULT}')
     print('Downloading model...')
-    download_gpt_model(
-        base_url="https://openaipublic.blob.core.windows.net/gpt-2/models",
-        model_size="124M",
-        download_dir="gpt2_weights"
-    )
+    weights_file = download_gpt_model(model_size="gpt2")
 
-    print("Load tensorflow checkpoint...")
-    nn.Embedding(1, 1)  # WTF?!
+    print("Loading weights...")
+    weights = torch_load('pytorch_model.bin')
+    weights = {k: v.to(Device.DEFAULT).realize() for k, v in weights.items()}
 
-    params = load_tf_checkpoint("gpt2_weights")
-
-    print("Loading model...")
-    tiny_model = load_model(params)
+    print("Loading model from weights...")
+    tiny_model = load_model(weights)
     tiny_model.reset_cache()
     print('Model loaded.')
 
+    print("Inference...")
     encoder = TinyEncoder()
     input_batch = encoder("What is the purpose of life?").unsqueeze(0)
     logits = tiny_model(input_batch, use_cache=True)
-    max_new_tokens = 30
+    max_new_tokens = 60
     idx = input_batch
     last_line_count = 0
+    temperature = 1.0
 
     for _ in range(max_new_tokens):
         logits = logits[:, -1, :]
 
-        probas = logits.softmax(axis=-1)
-        nxt = probas.argmax(axis=-1, keepdim=True).realize()
+        if temperature < 1e-6:
+            nxt = logits.argmax(axis=-1, keepdim=True)
+        else:
+            probas = (logits / temperature).softmax(axis=-1)
+            nxt = probas.multinomial()
 
-        nxt = sample_top_p(logits, top_p=0.7)
-
+        nxt = nxt.realize()
         idx = idx.cat(nxt, dim=1)
+
         logits = tiny_model(nxt, use_cache=True).realize()
 
         output = encoder.tokenizer.decode(idx.squeeze(0).tolist())
