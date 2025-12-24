@@ -144,10 +144,20 @@ GPT_CONFIG_350M = {
     "qkv_bias": True
 }
 
+GPT_CONFIG_774M = {
+    "vocab_size": 50257,
+    "context_length": 1024,
+    "emb_dim": 1280,
+    "n_heads": 20,
+    "n_layers": 36,
+    "drop_rate": 0.1,
+    "qkv_bias": True
+}
+
 
 class TinyEncoder:
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.tokenizer = tiktoken.get_encoding("gpt2")
 
     def __call__(self, text: str) -> Tensor:
@@ -155,13 +165,10 @@ class TinyEncoder:
         token_ids = Tensor(token_ids)
         return token_ids
 
-    def decode(self, idx: Tensor) -> str:
-        return self.tokenizer.decode()
-
 
 class MultiHeadAttention:
 
-    def __init__(self, d_in: int, d_out: int, context_length: int, n_heads: int, dropout: float = 0.0, bias=False) -> None:
+    def __init__(self, d_in: int, d_out: int, context_length: int, n_heads: int, dropout: float = 0.0, bias: bool = False) -> None:
         self.d_in = d_in
         self.d_out = d_out
         self.context_length = context_length
@@ -275,21 +282,21 @@ class LayerNorm:
 
 class TransformerBlock:
 
-    def __init__(self, cfg: dict[str, int]):
+    def __init__(self, cfg: dict[str, int | bool | float]):
         super().__init__()
 
         self.attention = MultiHeadAttention(
-            d_in=cfg['emb_dim'],
-            d_out=cfg['emb_dim'],
-            context_length=cfg['context_length'],
-            n_heads=cfg['n_heads'],
+            d_in=int(cfg['emb_dim']),
+            d_out=int(cfg['emb_dim']),
+            context_length=int(cfg['context_length']),
+            n_heads=int(cfg['n_heads']),
             dropout=cfg['drop_rate'],
-            bias=cfg['qkv_bias']
+            bias=bool(cfg['qkv_bias'])
         )
 
-        self.ff = FeedForward(cfg['emb_dim'])
-        self.norm1 = LayerNorm(cfg['emb_dim'])
-        self.norm2 = LayerNorm(cfg['emb_dim'])
+        self.ff = FeedForward(int(cfg['emb_dim']))
+        self.norm1 = LayerNorm(int(cfg['emb_dim']))
+        self.norm2 = LayerNorm(int(cfg['emb_dim']))
         self.drop_rate = cfg['drop_rate']  # applied at multiple levels to prevent overfitting at each level
 
     def __call__(self, x: Tensor, use_cache: bool = False) -> Tensor:
@@ -309,7 +316,7 @@ class TransformerBlock:
 
 
 class TinyGPTModel:
-    def __init__(self, cfg: dict[str, object]):
+    def __init__(self, cfg: dict[str, int | bool | float]):
 
         # Embedding
         self.emb_layer = nn.Embedding(cfg['vocab_size'], cfg['emb_dim'])
@@ -317,10 +324,10 @@ class TinyGPTModel:
         self.drop_rate = cfg["drop_rate"]
 
         # Transformer blocks
-        self.trf_blocks = [TransformerBlock(cfg) for _ in range(cfg["n_layers"])]
+        self.trf_blocks = [TransformerBlock(cfg) for _ in range(int(cfg["n_layers"]))]
 
         # Layer norms
-        self.final_norm = LayerNorm(cfg["emb_dim"])
+        self.final_norm = LayerNorm(int(cfg["emb_dim"]))
         self.out_head = nn.Linear(cfg["emb_dim"], cfg["vocab_size"], bias=True)
 
         self.current_pos = 0
@@ -366,7 +373,7 @@ def download_gpt_model(model_size: str) -> pathlib.Path:
     return out_file
 
 
-def assign(left: Tensor, right: Tensor):
+def assign(left: Tensor, right: Tensor) -> Tensor:
     if left.shape != right.shape:
         raise ValueError(f'Dimensions mismatch: {left.shape} != {right.shape}')
     return right.contiguous().realize()
@@ -377,6 +384,8 @@ def load_model(weights: dict[str, Tensor], model_size: str) -> TinyGPTModel:
         cfg = GPT_CONFIG_124M
     elif model_size == 'gpt2-medium':
         cfg = GPT_CONFIG_350M
+    elif model_size == 'gpt2-large':
+        cfg = GPT_CONFIG_774M
     else:
         raise NotImplementedError(model_size)
 
@@ -474,8 +483,31 @@ def apply_repetition_penalty(logits: Tensor, generated_ids: Tensor, penalty: flo
     return Tensor(logits_list).unsqueeze(0)
 
 
+def prevent_ngram_repetition(logits: Tensor, generated_ids: Tensor, n: int = 3) -> Tensor:
+    """Prevent n-gram repetition."""
+    generated_list = generated_ids.squeeze(0).tolist()
+    logits_list = logits.squeeze(0).tolist()
+
+    if len(generated_list) < n:
+        return logits
+
+    context = tuple(generated_list[-(n - 1):])
+
+    banned_ids = set()
+    for i in range(len(generated_list) - n + 1):
+        if tuple(generated_list[i:i + n - 1]) == context:
+            # Last n-1 tokens match [A, B] <=> [A, B]
+            # Therefore, bann the next token, because this token was already generated
+            # (e.g. C, if generated_list contains [A, B, C])
+            banned_ids.add(generated_list[i + n - 1])
+
+    for x in banned_ids:
+        logits_list[x] = float('-inf')
+    return Tensor(logits_list).unsqueeze(0)
+
+
 if __name__ == "__main__":
-    model = "gpt2-medium"  # gpt2, gpt2-medium
+    model = "gpt2-large"  # gpt2, gpt2-medium, gpt2-large
     print(f'Default Device: {Device.DEFAULT}')
     print(f'Model Size: {model}')
     print('Downloading model...')
@@ -492,9 +524,9 @@ if __name__ == "__main__":
 
     print("Inference...")
     encoder = TinyEncoder()
-    input_batch = encoder("I want to wish you a merry Christmas").unsqueeze(0)
+    input_batch = encoder("What is the purpose of life?").unsqueeze(0)
     logits = tiny_model(input_batch, use_cache=True)
-    max_new_tokens = 60
+    max_new_tokens = 100
     idx = input_batch
     last_line_count = 0
     temperature = 0.0
@@ -502,7 +534,7 @@ if __name__ == "__main__":
     for _ in range(max_new_tokens):
         logits = logits[:, -1, :]
 
-        logits = apply_repetition_penalty(logits, idx, penalty=1.2)
+        logits = prevent_ngram_repetition(logits, idx, n=5)
 
         if temperature < 1e-6:
             nxt = logits.argmax(axis=-1, keepdim=True)
