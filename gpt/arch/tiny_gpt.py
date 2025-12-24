@@ -134,6 +134,16 @@ GPT_CONFIG_124M = {
     "qkv_bias": True
 }
 
+GPT_CONFIG_350M = {
+    "vocab_size": 50257,
+    "context_length": 1024,
+    "emb_dim": 1024,
+    "n_heads": 16,
+    "n_layers": 24,
+    "drop_rate": 0.1,
+    "qkv_bias": True
+}
+
 
 class TinyEncoder:
 
@@ -344,7 +354,7 @@ class TinyGPTModel:
 
 def download_gpt_model(model_size: str) -> pathlib.Path:
     url = f"https://huggingface.co/{model_size}/resolve/main/pytorch_model.bin"
-    out_file = pathlib.Path(url.split('/')[-1])
+    out_file = pathlib.Path(f'pytorch_model_{model_size}.bin')
 
     if out_file.exists():
         return out_file
@@ -362,8 +372,15 @@ def assign(left: Tensor, right: Tensor):
     return right.contiguous().realize()
 
 
-def load_model(weights) -> TinyGPTModel:
-    tiny_model = TinyGPTModel(GPT_CONFIG_124M)
+def load_model(weights: dict[str, Tensor], model_size: str) -> TinyGPTModel:
+    if model_size == 'gpt2':
+        cfg = GPT_CONFIG_124M
+    elif model_size == 'gpt2-medium':
+        cfg = GPT_CONFIG_350M
+    else:
+        raise NotImplementedError(model_size)
+
+    tiny_model = TinyGPTModel(cfg)
 
     tiny_model.emb_layer.weight = assign(tiny_model.emb_layer.weight, weights["wte.weight"])
     tiny_model.pos_layer.weight = assign(tiny_model.pos_layer.weight, weights["wpe.weight"])
@@ -444,23 +461,23 @@ def sample_top_p(logits_batch: Tensor, top_p: float = 0.9) -> Tensor:
 
 
 if __name__ == "__main__":
-    Tensor.training = False
+    model = "gpt2-medium"  # gpt2, gpt2-medium
     print(f'Default Device: {Device.DEFAULT}')
     print('Downloading model...')
-    weights_file = download_gpt_model(model_size="gpt2")
+    weights_file = download_gpt_model(model_size=model)
 
     print("Loading weights...")
-    weights = torch_load('pytorch_model.bin')
+    weights = torch_load(weights_file)
     weights = {k: v.to(Device.DEFAULT).realize() for k, v in weights.items()}
 
     print("Loading model from weights...")
-    tiny_model = load_model(weights)
+    tiny_model = load_model(weights, model)
     tiny_model.reset_cache()
     print('Model loaded.')
 
     print("Inference...")
     encoder = TinyEncoder()
-    input_batch = encoder("What is the purpose of life?").unsqueeze(0)
+    input_batch = encoder("What is 1 + 1?").unsqueeze(0)
     logits = tiny_model(input_batch, use_cache=True)
     max_new_tokens = 60
     idx = input_batch
@@ -478,9 +495,7 @@ if __name__ == "__main__":
 
         nxt = nxt.realize()
         idx = idx.cat(nxt, dim=1)
-
         logits = tiny_model(nxt, use_cache=True).realize()
-
         output = encoder.tokenizer.decode(idx.squeeze(0).tolist())
 
         # Clear previous output
