@@ -460,9 +460,24 @@ def sample_top_p(logits_batch: Tensor, top_p: float = 0.9) -> Tensor:
     return Tensor(out, device=logits_batch.device).reshape(logits_batch.shape[0], 1)
 
 
+def apply_repetition_penalty(logits: Tensor, generated_ids: Tensor, penalty: float = 1.1) -> Tensor:
+    """Penalize tokens that have already been generated."""
+    generated_list = generated_ids.squeeze(0).tolist()
+    logits_list = logits.squeeze(0).tolist()
+
+    for token_id in set(generated_list):
+        if logits_list[token_id] > 0:
+            logits_list[token_id] /= penalty
+        else:
+            logits_list[token_id] *= penalty
+
+    return Tensor(logits_list).unsqueeze(0)
+
+
 if __name__ == "__main__":
     model = "gpt2-medium"  # gpt2, gpt2-medium
     print(f'Default Device: {Device.DEFAULT}')
+    print(f'Model Size: {model}')
     print('Downloading model...')
     weights_file = download_gpt_model(model_size=model)
 
@@ -477,7 +492,7 @@ if __name__ == "__main__":
 
     print("Inference...")
     encoder = TinyEncoder()
-    input_batch = encoder("What is 1 + 1?").unsqueeze(0)
+    input_batch = encoder("I want to wish you a merry Christmas").unsqueeze(0)
     logits = tiny_model(input_batch, use_cache=True)
     max_new_tokens = 60
     idx = input_batch
@@ -486,6 +501,8 @@ if __name__ == "__main__":
 
     for _ in range(max_new_tokens):
         logits = logits[:, -1, :]
+
+        logits = apply_repetition_penalty(logits, idx, penalty=1.2)
 
         if temperature < 1e-6:
             nxt = logits.argmax(axis=-1, keepdim=True)
@@ -505,3 +522,7 @@ if __name__ == "__main__":
 
         print(output, end="\r")
         last_line_count = output.count('\n')
+
+        if output.endswith('<|endoftext|>'):
+            print()
+            break
