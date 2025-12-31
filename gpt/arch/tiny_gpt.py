@@ -507,7 +507,7 @@ def prevent_ngram_repetition(logits: Tensor, generated_ids: Tensor, n: int = 3) 
 
 
 if __name__ == "__main__":
-    model = "gpt2-large"  # gpt2, gpt2-medium, gpt2-large
+    model = "gpt2"  # gpt2, gpt2-medium, gpt2-large
     print(f'Default Device: {Device.DEFAULT}')
     print(f'Model Size: {model}')
     print('Downloading model...')
@@ -539,7 +539,11 @@ if __name__ == "__main__":
         if temperature < 1e-6:
             nxt = logits.argmax(axis=-1, keepdim=True)
         else:
+            # Softmax exponentiation is non-linear.
+            # High temperature -> flatter distribution (uniform-like)
             probas = (logits / temperature).softmax(axis=-1)
+            # Pick a token based on the probability distribution
+            # e.g. random.choices(range(0,len(logits)), weights=logits, k=100)
             nxt = probas.multinomial()
 
         nxt = nxt.realize()
