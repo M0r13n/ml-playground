@@ -113,10 +113,12 @@
 │  Next token prediction: "mat" (or sample from distribution)                 │
 └─────────────────────────────────────────────────────────────────────────────┘
 """
+import heapq
 import math
 import pathlib
 import random
 import sys
+import typing
 import tiktoken
 
 import requests as r
@@ -317,7 +319,6 @@ class TransformerBlock:
 
 class TinyGPTModel:
     def __init__(self, cfg: dict[str, int | bool | float]):
-
         # Embedding
         self.emb_layer = nn.Embedding(cfg['vocab_size'], cfg['emb_dim'])
         self.pos_layer = nn.Embedding(cfg['context_length'], cfg['emb_dim'])
@@ -332,8 +333,9 @@ class TinyGPTModel:
 
         self.current_pos = 0
 
-    def __call__(self, in_idx: Tensor, use_cache: bool = False) -> Tensor:
-        num_batches, seq_len = in_idx.shape
+    def embed(self, in_idx: Tensor, use_cache: bool = False) -> Tensor:
+        """Token + positional embeddings"""
+        _, seq_len = in_idx.shape
         embedding = self.emb_layer(in_idx).realize()
 
         if use_cache:
@@ -344,8 +346,11 @@ class TinyGPTModel:
             self.current_pos = seq_len
 
         pos_embeddings = self.pos_layer(positions)
+        return embedding + pos_embeddings
 
-        x = embedding + pos_embeddings
+    def __call__(self, in_idx: Tensor, use_cache: bool = False) -> Tensor:
+        """Forward"""
+        x = self.embed(in_idx, use_cache)
         x = x.dropout(self.drop_rate)
         for block in self.trf_blocks:
             x = block(x, use_cache=use_cache)
@@ -357,6 +362,13 @@ class TinyGPTModel:
         self.current_pos = 0
         for blk in self.trf_blocks:
             blk.attention.reset_cache()
+
+    def forward_layers(self, x: Tensor, use_cache: bool = False) -> typing.Generator[tuple[int, Tensor], None, None]:
+        """Generator yielding hidden state after each layer."""
+        x = x.dropout(self.drop_rate)
+        for i, block in enumerate(self.trf_blocks):
+            x = block(x, use_cache=use_cache)
+            yield i, x
 
 
 def download_gpt_model(model_size: str) -> pathlib.Path:
@@ -506,31 +518,32 @@ def prevent_ngram_repetition(logits: Tensor, generated_ids: Tensor, n: int = 3) 
     return Tensor(logits_list).unsqueeze(0)
 
 
-if __name__ == "__main__":
-    model = "gpt2"  # gpt2, gpt2-medium, gpt2-large
-    print(f'Default Device: {Device.DEFAULT}')
-    print(f'Model Size: {model}')
-    print('Downloading model...')
-    weights_file = download_gpt_model(model_size=model)
+def explore_hidden_layers(model: TinyGPTModel, text: str, max_new_tokens: int, encoder: TinyEncoder) -> None:
+    """Expore hidden states layer by layer."""
+    idx = encoder(text).unsqueeze(0)
+    logits = model(idx, use_cache=False)
+    for _ in range(max_new_tokens):
+        logits = logits[:, -1, :]
+        nxt = logits.argmax(axis=-1, keepdim=True)
+        idx = idx.cat(nxt, dim=1)
 
-    print("Loading weights...")
-    weights = torch_load(weights_file)
-    weights = {k: v.to(Device.DEFAULT).realize() for k, v in weights.items()}
+        print('------')
+        print(encoder.tokenizer.decode(idx.squeeze(0).tolist()))
 
-    print("Loading model from weights...")
-    tiny_model = load_model(weights, model)
-    tiny_model.reset_cache()
-    print('Model loaded.')
+        x = model.embed(idx, False)
+        for i, layer in model.forward_layers(x, False):
+            normed = model.final_norm(layer)
+            logits = model.out_head(normed)
+            logits_list = logits[:, -1, :].squeeze().tolist()
+            top = heapq.nlargest(5, range(len(logits_list)), key=lambda i: logits_list[i])
+            print(i, [tiktoken.get_encoding("gpt2").decode([t,]) for t in top])
 
-    print("Inference...")
-    encoder = TinyEncoder()
-    input_batch = encoder("What is the purpose of life?").unsqueeze(0)
-    logits = tiny_model(input_batch, use_cache=True)
-    max_new_tokens = 100
-    idx = input_batch
+
+def run_inference(model: TinyGPTModel, text: str, max_new_tokens: int, encoder: TinyEncoder, temperature: float = 0.0) -> None:
+    """Run inference."""
+    idx = encoder(text).unsqueeze(0)
+    logits = model(idx, use_cache=True)
     last_line_count = 0
-    temperature = 0.0
-
     for _ in range(max_new_tokens):
         logits = logits[:, -1, :]
 
@@ -548,7 +561,7 @@ if __name__ == "__main__":
 
         nxt = nxt.realize()
         idx = idx.cat(nxt, dim=1)
-        logits = tiny_model(nxt, use_cache=True).realize()
+        logits = model(nxt, use_cache=True).realize()
         output = encoder.tokenizer.decode(idx.squeeze(0).tolist())
 
         # Clear previous output
@@ -562,3 +575,32 @@ if __name__ == "__main__":
         if output.endswith('<|endoftext|>'):
             print()
             break
+
+
+def main() -> None:
+    model = "gpt2"  # gpt2, gpt2-medium, gpt2-large
+    print(f'Default Device: {Device.DEFAULT}')
+    print(f'Model Size: {model}')
+    print('Downloading model...')
+    weights_file = download_gpt_model(model_size=model)
+
+    print("Loading weights...")
+    weights = torch_load(weights_file)
+    weights = {k: v.to(Device.DEFAULT).realize() for k, v in weights.items()}
+
+    print("Loading model from weights...")
+    tiny_model = load_model(weights, model)
+    tiny_model.reset_cache()
+    print('Model loaded.')
+
+    print("Inference...")
+    encoder = TinyEncoder()
+    text = "What is the purpose of life?"
+
+    run_inference(tiny_model, text, max_new_tokens=10, encoder=encoder, temperature=0.0)
+    tiny_model.reset_cache()
+    explore_hidden_layers(tiny_model, text, max_new_tokens=10, encoder=encoder)
+
+
+if __name__ == "__main__":
+    main()
