@@ -117,7 +117,6 @@ import heapq
 import math
 import pathlib
 import random
-import sys
 import typing
 import tiktoken
 
@@ -537,44 +536,6 @@ def explore_hidden_layers(model: TinyGPTModel, text: str, max_new_tokens: int, e
             logits_list = logits[:, -1, :].squeeze().tolist()
             top = heapq.nlargest(5, range(len(logits_list)), key=lambda i: logits_list[i])
             print(i, [tiktoken.get_encoding("gpt2").decode([t,]) for t in top])
-
-
-def run_inference(model: TinyGPTModel, text: str, max_new_tokens: int, encoder: TinyEncoder, temperature: float = 0.0) -> None:
-    """Run inference."""
-    idx = encoder(text).unsqueeze(0)
-    logits = model(idx, use_cache=True)
-    last_line_count = 0
-    for _ in range(max_new_tokens):
-        logits = logits[:, -1, :]
-
-        logits = prevent_ngram_repetition(logits, idx, n=5)
-
-        if temperature < 1e-6:
-            nxt = logits.argmax(axis=-1, keepdim=True)
-        else:
-            # Softmax exponentiation is non-linear.
-            # High temperature -> flatter distribution (uniform-like)
-            probas = (logits / temperature).softmax(axis=-1)
-            # Pick a token based on the probability distribution
-            # e.g. random.choices(range(0,len(logits)), weights=logits, k=100)
-            nxt = probas.multinomial()
-
-        nxt = nxt.realize()
-        idx = idx.cat(nxt, dim=1)
-        logits = model(nxt, use_cache=True).realize()
-        output = encoder.tokenizer.decode(idx.squeeze(0).tolist())
-
-        # Clear previous output
-        if last_line_count > 0:
-            sys.stdout.write(f"\033[{last_line_count}A")
-            sys.stdout.write("\033[J")
-
-        print(output, end="\r")
-        last_line_count = output.count('\n')
-
-        if output.endswith('<|endoftext|>'):
-            print()
-            break
 
 
 def load_weights(fp: pathlib.Path) -> dict[str, Tensor]:

@@ -33,7 +33,7 @@ tiny_model = load_model(weights, model)
 print('Model loaded.')
 
 encoder = TinyEncoder()
-text = "What is the purpose of life?"
+text = "What is the purpose of the universe?"
 idx = encoder(text).unsqueeze(0)
 
 print(f"Input : {text}")
