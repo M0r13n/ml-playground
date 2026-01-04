@@ -121,9 +121,9 @@ import sys
 import typing
 import tiktoken
 
-import requests as r
-from tinygrad import Tensor, Device, nn
-from tinygrad.nn.state import torch_load
+import requests as r  # type: ignore
+from tinygrad import Tensor, Device, nn  # type: ignore
+from tinygrad.nn.state import torch_load  # type: ignore
 
 
 GPT_CONFIG_124M = {
@@ -458,7 +458,7 @@ def sample_top_p(logits_batch: Tensor, top_p: float = 0.9) -> Tensor:
         max_logit = max(logits)
 
         # softmax (stable)
-        probs = [math.exp(l - max_logit) for l in logits]
+        probs = [math.exp(logit - max_logit) for logit in logits]
         s = sum(probs)
         probs = [p / s for p in probs]
 
@@ -577,30 +577,7 @@ def run_inference(model: TinyGPTModel, text: str, max_new_tokens: int, encoder: 
             break
 
 
-def main() -> None:
-    model = "gpt2"  # gpt2, gpt2-medium, gpt2-large
-    print(f'Default Device: {Device.DEFAULT}')
-    print(f'Model Size: {model}')
-    print('Downloading model...')
-    weights_file = download_gpt_model(model_size=model)
-
-    print("Loading weights...")
-    weights = torch_load(weights_file)
+def load_weights(fp: pathlib.Path) -> dict[str, Tensor]:
+    weights = torch_load(fp)
     weights = {k: v.to(Device.DEFAULT).realize() for k, v in weights.items()}
-
-    print("Loading model from weights...")
-    tiny_model = load_model(weights, model)
-    tiny_model.reset_cache()
-    print('Model loaded.')
-
-    print("Inference...")
-    encoder = TinyEncoder()
-    text = "What is the purpose of life?"
-
-    run_inference(tiny_model, text, max_new_tokens=10, encoder=encoder, temperature=0.0)
-    tiny_model.reset_cache()
-    explore_hidden_layers(tiny_model, text, max_new_tokens=10, encoder=encoder)
-
-
-if __name__ == "__main__":
-    main()
+    return weights
