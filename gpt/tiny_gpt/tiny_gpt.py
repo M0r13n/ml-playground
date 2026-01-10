@@ -118,12 +118,11 @@ import math
 import pathlib
 import random
 import typing
+
+import requests as r
 import tiktoken
-
-import requests as r  # type: ignore
-from tinygrad import Tensor, Device, nn  # type: ignore
+from tinygrad import Device, Tensor, nn  # type: ignore
 from tinygrad.nn.state import torch_load  # type: ignore
-
 
 GPT_CONFIG_124M = {
     "vocab_size": 50257,
@@ -186,8 +185,8 @@ class MultiHeadAttention:
         self.dropout = dropout
         self.out_proj = nn.Linear(d_out, d_out, bias=bias)
 
-        self.k_cache = None
-        self.v_cache = None
+        self.k_cache: Tensor = None
+        self.v_cache: Tensor = None
 
     def reset_cache(self) -> None:
         self.k_cache = None
