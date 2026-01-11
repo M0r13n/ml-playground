@@ -44,10 +44,9 @@ attn = tiny_model.trf_blocks[0].attention
 
 B, num_tokens, d_in = x.shape
 
-# linear projections (B, num_tokens, d_out)
-keys = attn.W_k(x)
-queries = attn.W_q(x)
-values = attn.W_v(x)
+# linear projections
+qkv = attn.c_attn(x)
+queries, keys, values = qkv.chunk(3, dim=-1)
 
 # split heads (B, num_tokens, d_out) -> (B, n_heads, num_tokens, head_dim)
 keys = keys.reshape(B, num_tokens, attn.n_heads, attn.head_dim).transpose(1, 2)

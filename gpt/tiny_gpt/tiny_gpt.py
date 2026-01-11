@@ -177,10 +177,8 @@ class MultiHeadAttention:
 
         assert self.d_out % n_heads == 0
 
-        # Linear Projections
-        self.W_q = nn.Linear(d_in, d_out, bias=bias)
-        self.W_k = nn.Linear(d_in, d_out, bias=bias)
-        self.W_v = nn.Linear(d_in, d_out, bias=bias)
+        # Linear Projections (Q, K, V) as a single matrix
+        self.c_attn = nn.Linear(d_in, 3 * d_out, bias=bias)
 
         self.dropout = dropout
         self.out_proj = nn.Linear(d_out, d_out, bias=bias)
@@ -195,10 +193,9 @@ class MultiHeadAttention:
     def __call__(self, x: Tensor, use_cache: bool = False) -> Tensor:
         b, num_tokens, _ = x.shape
 
-        # linear projections (B, num_tokens, d_out)
-        keys = self.W_k(x)
-        queries = self.W_q(x)
-        values = self.W_v(x)
+        # linear projections each with (B, num_tokens, d_out)
+        qkv = self.c_attn(x)
+        queries, keys, values = qkv.chunk(3, dim=-1)
 
         # split heads (B, num_tokens, d_out) -> (B, n_heads, num_tokens, head_dim)
         keys = keys.reshape(b, num_tokens, self.n_heads, self.head_dim).transpose(1, 2)
@@ -327,7 +324,7 @@ class TinyGPTModel:
 
         # Layer norms
         self.final_norm = LayerNorm(int(cfg["emb_dim"]))
-        self.out_head = nn.Linear(cfg["emb_dim"], cfg["vocab_size"], bias=True)
+        self.out_head = nn.Linear(cfg["emb_dim"], cfg["vocab_size"], bias=False)
 
         self.current_pos = 0
 
@@ -411,21 +408,9 @@ def load_model(weights: dict[str, Tensor], model_size: str) -> TinyGPTModel:
         block.norm2.scale = assign(block.norm2.scale, weights[f"h.{i}.ln_2.weight"])
         block.norm2.shift = assign(block.norm2.shift, weights[f"h.{i}.ln_2.bias"])
 
-        # Attention - weights
-        qkv_w = weights[f"h.{i}.attn.c_attn.weight"]  # Shape: (768, 2304)
-        q_w, k_w, v_w = qkv_w.chunk(3, dim=-1)
-
-        block.attention.W_q.weight = assign(block.attention.W_q.weight, q_w.T)
-        block.attention.W_k.weight = assign(block.attention.W_k.weight, k_w.T)
-        block.attention.W_v.weight = assign(block.attention.W_v.weight, v_w.T)
-
-        # Attention - bias
-        qkv_b = weights[f"h.{i}.attn.c_attn.bias"]
-        q_b, k_b, v_b = qkv_b.chunk(3, dim=-1)
-
-        block.attention.W_q.bias = assign(block.attention.W_q.bias, q_b)
-        block.attention.W_k.bias = assign(block.attention.W_k.bias, k_b)
-        block.attention.W_v.bias = assign(block.attention.W_v.bias, v_b)
+        # Attention - weights/bias
+        block.attention.c_attn.weight = assign(block.attention.c_attn.weight, weights[f"h.{i}.attn.c_attn.weight"].T)
+        block.attention.c_attn.bias = assign(block.attention.c_attn.bias, weights[f"h.{i}.attn.c_attn.bias"])
 
         # Attention = Output projection
         block.attention.out_proj.weight = assign(block.attention.out_proj.weight, weights[f"h.{i}.attn.c_proj.weight"].T)
