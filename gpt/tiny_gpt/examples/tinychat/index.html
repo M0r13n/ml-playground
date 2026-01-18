@@ -22,6 +22,8 @@
             --color-rule: #1a1a1a;
             --color-muted: #5c5c5c;
             --color-user-bg: #e8e5e0;
+            --color-submit: #137752;
+            --color-submit-hover: #054d32;
             --color-danger: #8b2020;
             --color-danger-hover: #6b1818;
             --font-mono: 'Berkeley Mono', 'IBM Plex Mono', 'Consolas', 'Monaco', monospace;
@@ -346,17 +348,22 @@
             gap: 0.4rem;
         }
 
+        .submit-btn {
+            background: var(--color-submit);
+            border-color: var(--color-submit);
+        }
+
         .submit-btn:hover {
-            background: #333;
+            background: var(--color-submit-hover);
         }
 
         .submit-btn:active {
-            background: #000;
+            background: var(--color-submit);
         }
 
         .submit-btn:disabled {
-            background: var(--color-muted);
-            border-color: var(--color-muted);
+            background: var(--color-submit);
+            border-color: var(--color-submit);
             cursor: not-allowed;
         }
 
