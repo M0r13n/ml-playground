@@ -114,7 +114,15 @@ class GroupedQueryAttention:
 
         self.out_proj = nn.Linear(self.d_out, d_in, bias=False)
 
-    def __call__(self, x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:
+        # KV-Cache
+        self.k_cache: Tensor | None = None
+        self.v_cache: Tensor | None = None
+
+    def reset_cache(self) -> None:
+        self.k_cache = None
+        self.v_cache = None
+
+    def __call__(self, x: Tensor, cos: Tensor, sin: Tensor, use_cache: bool = False) -> Tensor:
         b, num_tokens, _ = x.shape
 
         # Queries, Keys and Values
@@ -132,8 +140,19 @@ class GroupedQueryAttention:
         k = self.k_norm(k)
 
         # Apply RoPE
-        q = compute_rope(q, cos, sin)
-        k = compute_rope(k, cos, sin)
+        position_offset = self.k_cache.shape[1] if self.k_cache is not None else 0
+        q = compute_rope(q, cos, sin, position_offset)
+        k = compute_rope(k, cos, sin, position_offset)
+
+        if use_cache:
+            if self.k_cache is not None and self.v_cache is not None:
+                self.k_cache = self.k_cache.cat(k, dim=2).realize()
+                self.v_cache = self.v_cache.cat(v, dim=2).realize()
+                k = self.k_cache
+                v = self.v_cache
+            else:
+                self.k_cache = k.realize()
+                self.v_cache = v.realize()
 
         # Expand K and V to match number of heads
         # Before:  [[[[0.05, -0.05]],                                  [[0.06, -0.6]]]]
@@ -142,7 +161,11 @@ class GroupedQueryAttention:
         v = v.repeat_interleave(self.group_size, dim=1)  # dim=1 <=> num_kv_groups
 
         # Causal Attention
-        causal_mask = Tensor.triu(Tensor.ones(num_tokens, num_tokens), diagonal=1).bool()
+        if use_cache:
+            num_tokens_k, num_tokens_q = k.shape[2], q.shape[2]
+            causal_mask = Tensor.triu(Tensor.ones(num_tokens_q, num_tokens_k), diagonal=num_tokens_k - num_tokens_q + 1).bool()
+        else:
+            causal_mask = Tensor.triu(Tensor.ones(num_tokens, num_tokens), diagonal=1).bool()
 
         # Attention
         attn_scores = q @ k.transpose(2, 3)
@@ -170,10 +193,10 @@ class TransformerBlock:
         self.norm1 = RMSNorm(int(cfg['emb_dim']))
         self.norm2 = RMSNorm(int(cfg['emb_dim']))
 
-    def __call__(self, x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:
+    def __call__(self, x: Tensor, cos: Tensor, sin: Tensor, use_cache: bool = False) -> Tensor:
         shortcut = x
         x = self.norm1(x)
-        x = self.attention(x, cos, sin)
+        x = self.attention(x, cos, sin, use_cache=use_cache)
         x = x + shortcut
 
         shortcut = x
@@ -203,14 +226,18 @@ class TinyQwen:
         """Token embedding"""
         return self.emb_layer(in_idx).realize()
 
-    def __call__(self, in_idx: Tensor) -> Tensor:
+    def __call__(self, in_idx: Tensor, use_cache: bool = False) -> Tensor:
         """Forward"""
         x = self.embed(in_idx)
         for block in self.trf_blocks:
-            x = block(x, self.cos, self.sin)
+            x = block(x, self.cos, self.sin, use_cache=use_cache)
         x = self.final_norm(x)
         logits = self.out_head(x)
         return logits
+
+    def reset_cache(self) -> None:
+        for blk in self.trf_blocks:
+            blk.attention.reset_cache()
 
 
 def assign(left: Tensor, right: Tensor) -> Tensor:
@@ -221,14 +248,13 @@ def assign(left: Tensor, right: Tensor) -> Tensor:
 
 def load_model(model_size: str = ''):
     # Load model params
-    ggfu = Tensor.from_url("https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf")
+    import pathlib
+    ggfu = Tensor(pathlib.Path('Qwen3-0.6B-Q8_0.gguf'))
     kv, state_dict = gguf_load(ggfu.to(None))
     tokenizer = SimpleTokenizer.from_gguf_kv(kv)
     model = TinyQwen(QWEN3_CONFIG)
 
     model.emb_layer.weight = assign(model.emb_layer.weight, state_dict["token_embd.weight"])
-
-    print([k for k in state_dict.keys() if k.startswith('blk.0') or True])
 
     for i, block in enumerate(model.trf_blocks):
         # Layer norms
@@ -258,21 +284,3 @@ def load_model(model_size: str = ''):
     model.out_head.weight = assign(model.out_head.weight, state_dict["token_embd.weight"])
 
     return tokenizer, model
-
-
-def main():
-
-    tokenizer, model = load_model()
-
-    prompt = "The capital of France is"
-    tokens = Tensor([tokenizer.encode(prompt)])
-
-    logits = model(tokens)
-    next_token = logits[0, -1, :].argmax().item()
-
-    print(f"Prompt: {prompt}")
-    print(f"Next token: {tokenizer.decode([next_token])}")
-
-
-if __name__ == "__main__":
-    main()
