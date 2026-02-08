@@ -217,7 +217,8 @@ class MultiHeadAttention:
                 self.k_cache = keys.realize()
                 self.v_cache = values.realize()
 
-        attention_scores = queries @ keys.transpose(2, 3)
+        # When using a KV-Cache queries has the dimension (B, n_heads, 1, head_dim) -> scales linearly
+        attention_scores = queries @ keys.transpose(2, 3)  # (B, n_heads, seq_len, num_tokens)
 
         if use_cache:
             num_tokens_k, num_tokens_q = keys.shape[2], queries.shape[2]
@@ -229,6 +230,7 @@ class MultiHeadAttention:
         attention_weights = (attention_scores / self.head_dim ** 0.5).softmax(axis=-1)
         attention_weights = attention_weights.dropout(self.dropout)
 
+        # (B, n_heads, seq_len, head_dim)
         context_vec = attention_weights @ values
 
         # (B, n_heads, num_tokens, head_dim) -> (B, num_tokens, d_out)
