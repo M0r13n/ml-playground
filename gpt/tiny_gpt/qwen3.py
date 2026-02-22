@@ -1,5 +1,5 @@
 import math
-from tinygrad import Tensor, nn
+from tinygrad import Tensor, nn, UOp  # type: ignore[attr-defined]
 from tinygrad.nn.state import gguf_load
 from tinygrad.apps.llm import SimpleTokenizer
 
@@ -48,7 +48,7 @@ class FeedForward:
         return self.down_proj(self.silu(self.gate_proj(x)) * self.up_proj(x))
 
 
-def precompute_rope_params(head_dim, theta_base=10_000, context_length=4096):
+def precompute_rope_params(head_dim: int, theta_base: int | float = 10_000, context_length: int = 4096) -> tuple[Tensor, Tensor]:
     """https://github.com/rasbt/LLMs-from-scratch/blob/main/ch05/07_gpt_to_llama/converting-llama2-to-llama3.ipynb"""
     if not head_dim % 2 == 0:
         raise ValueError("head_dim must be even")
@@ -62,7 +62,7 @@ def precompute_rope_params(head_dim, theta_base=10_000, context_length=4096):
     return cos, sin
 
 
-def compute_rope(x, cos, sin, position_offset=0):
+def compute_rope(x: Tensor, cos: Tensor, sin: Tensor, position_offset: int | UOp = 0) -> Tensor:
     """https://github.com/rasbt/LLMs-from-scratch/blob/main/ch05/07_gpt_to_llama/converting-llama2-to-llama3.ipynb"""
     _, _, seq_len, head_dim = x.shape
     if not head_dim % 2 == 0:
@@ -96,7 +96,7 @@ class GroupedQueryAttention:
       v1      v2             v1  v1  v2  v2
     """
 
-    def __init__(self, d_in: int, n_heads: int, num_kv_groups: int, head_dim) -> None:
+    def __init__(self, d_in: int, n_heads: int, num_kv_groups: int, head_dim: int) -> None:
         self.d_in = d_in
         self.n_heads = n_heads
         self.num_kv_groups = num_kv_groups
@@ -140,7 +140,7 @@ class GroupedQueryAttention:
         k = self.k_norm(k)
 
         # Apply RoPE
-        position_offset = self.k_cache.shape[1] if self.k_cache is not None else 0
+        position_offset = self.k_cache.shape[2] if self.k_cache is not None else 0
         q = compute_rope(q, cos, sin, position_offset)
         k = compute_rope(k, cos, sin, position_offset)
 
@@ -163,7 +163,7 @@ class GroupedQueryAttention:
         # Causal Attention
         if use_cache:
             num_tokens_k, num_tokens_q = k.shape[2], q.shape[2]
-            causal_mask = Tensor.triu(Tensor.ones(num_tokens_q, num_tokens_k), diagonal=num_tokens_k - num_tokens_q + 1).bool()
+            causal_mask = Tensor.triu(Tensor.ones(num_tokens_q, num_tokens_k), diagonal=int(num_tokens_k - num_tokens_q + 1)).bool()
         else:
             causal_mask = Tensor.triu(Tensor.ones(num_tokens, num_tokens), diagonal=1).bool()
 
@@ -204,7 +204,7 @@ class TransformerBlock:
         x = self.ff(x)
         x = x + shortcut
 
-        return x
+        return x.contiguous()
 
 
 class TinyQwen:
@@ -226,14 +226,17 @@ class TinyQwen:
         """Token embedding"""
         return self.emb_layer(in_idx).realize()
 
-    def __call__(self, in_idx: Tensor, use_cache: bool = False) -> Tensor:
-        """Forward"""
+    def forward(self, in_idx: Tensor, use_cache: bool = False) -> Tensor:
         x = self.embed(in_idx)
         for block in self.trf_blocks:
             x = block(x, self.cos, self.sin, use_cache=use_cache)
         x = self.final_norm(x)
         logits = self.out_head(x)
         return logits
+
+    def __call__(self, in_idx: Tensor, use_cache: bool = False) -> Tensor:
+        """Forward"""
+        return self.forward(in_idx, use_cache)
 
     def reset_cache(self) -> None:
         for blk in self.trf_blocks:
@@ -246,11 +249,12 @@ def assign(left: Tensor, right: Tensor) -> Tensor:
     return right.contiguous().realize()
 
 
-def load_model(model_size: str = ''):
+def load_model(model_size: str = '') -> tuple[SimpleTokenizer, TinyQwen]:
     # Load model params
     import pathlib
     ggfu = Tensor(pathlib.Path('Qwen3-0.6B-Q8_0.gguf'))
     kv, state_dict = gguf_load(ggfu.to(None))
+    state_dict = {k: v.cast('float16') for k, v in state_dict.items()}
     tokenizer = SimpleTokenizer.from_gguf_kv(kv)
     model = TinyQwen(QWEN3_CONFIG)
 

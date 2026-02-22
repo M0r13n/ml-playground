@@ -1,3 +1,3 @@
 test:
-	mypy ./tiny_gpt.py ./examples/*.py --strict
+	mypy ./qwen3.py --strict
 	flake8 ./tiny_gpt.py ./examples/*.py
